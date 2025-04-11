@@ -33,6 +33,7 @@ from autogen_core.models import (
     SystemMessage,
 )
 from autogen_core.tools import BaseTool, FunctionTool
+from autogen_ext.tools.mcp import McpToolAdapter
 from pydantic import BaseModel
 from typing_extensions import Self
 
@@ -1254,6 +1255,9 @@ class AssistantAgent(BaseChatAgent, Component[AssistantAgentConfig]):
     async def on_reset(self, cancellation_token: CancellationToken) -> None:
         """Reset the assistant agent to its initialization state."""
         await self._model_context.clear()
+        for tool in self._tools:
+            if isinstance(tool, McpToolAdapter):
+                await tool.close()
 
     async def save_state(self) -> Mapping[str, Any]:
         """Save the current state of the assistant agent."""

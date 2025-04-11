@@ -6,11 +6,11 @@ from typing import Any, Generic, Type, TypeVar
 from autogen_core import CancellationToken
 from autogen_core.tools import BaseTool
 from json_schema_to_pydantic import create_model
-from mcp import Tool
+from mcp import Tool, ClientSession
 from pydantic import BaseModel
 
 from ._config import McpServerParams
-from ._session import create_mcp_server_session
+from ._session import create_mcp_server_session, get_mcp_server_session
 
 TServerParams = TypeVar("TServerParams", bound=McpServerParams)
 
@@ -41,6 +41,7 @@ class McpToolAdapter(BaseTool[BaseModel, Any], ABC, Generic[TServerParams]):
         return_type: Type[Any] = object
 
         super().__init__(input_model, return_type, name, description)
+        self.session:ClientSession|None = None
 
     async def run(self, args: BaseModel, cancellation_token: CancellationToken) -> Any:
         """
@@ -62,19 +63,20 @@ class McpToolAdapter(BaseTool[BaseModel, Any], ABC, Generic[TServerParams]):
         kwargs = args.model_dump(exclude_unset=True)
 
         try:
-            async with create_mcp_server_session(self._server_params) as session:
-                await session.initialize()
+            if self.session is None:
+                self.session = await get_mcp_server_session(self._server_params)
+                await self.session.initialize()
 
-                if cancellation_token.is_cancelled():
-                    raise Exception("Operation cancelled")
+            if cancellation_token.is_cancelled():
+                raise Exception("Operation cancelled")
 
-                result_future = asyncio.ensure_future(session.call_tool(name=self._tool.name, arguments=kwargs))
-                cancellation_token.link_future(result_future)
-                result = await result_future
+            result_future = asyncio.ensure_future(self.session.call_tool(name=self._tool.name, arguments=kwargs))
+            cancellation_token.link_future(result_future)
+            result = await result_future
 
-                if result.isError:
-                    raise Exception(f"MCP tool execution failed: {result.content}")
-                return result.content
+            if result.isError:
+                raise Exception(f"MCP tool execution failed: {result.content}")
+            return result.content
         except Exception as e:
             error_message = self._format_errors(e)
             raise Exception(error_message) from e
@@ -119,3 +121,10 @@ class McpToolAdapter(BaseTool[BaseModel, Any], ABC, Generic[TServerParams]):
         else:
             error_message += f"{str(error)}\n"
         return error_message
+
+    async def close(self) -> None:
+        """Close the MCP session."""
+        if self.session is not None:
+            # that session dose not support close
+            del self.session
+            self.session = None
